@@ -128,6 +128,11 @@ export class SDKAgent {
     // Use custom spawn to capture PIDs for zombie process cleanup (Issue #737)
     // Use dedicated cwd to isolate observer sessions from user's `claude --resume` list
     ensureDir(OBSERVER_SESSIONS_DIR);
+    // Read user-configured permission mode (Issue #1893)
+    // Respects bypassPermissions setting so sub-agents don't prompt for permissions
+    const permissionMode = settings.CLAUDE_MEM_PERMISSION_MODE;
+    const isBypass = permissionMode === 'bypassPermissions';
+
     // CRITICAL: Pass isolated env to prevent Issue #733 (API key pollution from project .env files)
     const queryResult = query({
       prompt: messageGenerator,
@@ -143,7 +148,10 @@ export class SDKAgent {
         pathToClaudeCodeExecutable: claudePath,
         // Custom spawn function captures PIDs to fix zombie process accumulation
         spawnClaudeCodeProcess: createPidCapturingSpawn(session.sessionDbId),
-        env: isolatedEnv  // Use isolated credentials from ~/.claude-mem/.env, not process.env
+        env: isolatedEnv,  // Use isolated credentials from ~/.claude-mem/.env, not process.env
+        // Respect user's permission mode setting (Issue #1893)
+        permissionMode: permissionMode as 'default' | 'bypassPermissions',
+        ...(isBypass && { allowDangerouslySkipPermissions: true })
       }
     });
 
