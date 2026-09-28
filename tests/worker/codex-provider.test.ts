@@ -29,6 +29,24 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 4 } }));
     return;
   }
+  if (process.env.MODE === 'quota-stderr') {
+    console.error('usage_limit_exceeded');
+    console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'Turn failed' } }));
+    process.exit(1);
+  }
+  if (process.env.MODE === 'rate-limit-prose') {
+    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Rate limit reached. Please try again later.' } }));
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 4 } }));
+    return;
+  }
+  if (process.env.MODE === 'chatgpt-cap-prose' || process.env.MODE === 'chatgpt-auth-prose') {
+    const text = process.env.MODE === 'chatgpt-cap-prose'
+      ? 'You have reached your ChatGPT usage cap.'
+      : 'Please sign in to ChatGPT to continue.';
+    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }));
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 4 } }));
+    return;
+  }
   if (process.env.MODE === 'tool') {
     console.log(JSON.stringify({ type: 'item.started', item: { type: 'command_execution' } }));
     setTimeout(() => {}, 10000);
@@ -92,9 +110,21 @@ it('preserves a quota refusal and rejects a tool event', async () => {
   const quotaProse = fakeCodex('quota-prose');
   await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, quotaProse))
     .rejects.toMatchObject({ kind: 'quota_exhausted' });
+  const quotaStderr = fakeCodex('quota-stderr');
+  await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, quotaStderr))
+    .rejects.toMatchObject({ kind: 'quota_exhausted' });
+  const rateLimitProse = fakeCodex('rate-limit-prose');
+  await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, rateLimitProse))
+    .rejects.toMatchObject({ kind: 'rate_limit' });
+  const chatgptCapProse = fakeCodex('chatgpt-cap-prose');
+  await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, chatgptCapProse))
+    .rejects.toMatchObject({ kind: 'quota_exhausted' });
+  const chatgptAuthProse = fakeCodex('chatgpt-auth-prose');
+  await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, chatgptAuthProse))
+    .rejects.toMatchObject({ kind: 'auth_invalid' });
   const tool = fakeCodex('tool');
   await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, tool))
-    .rejects.toMatchObject({ kind: 'transient' });
+    .rejects.toMatchObject({ kind: 'setup_required' });
 });
 
 it('kills a cancelled turn and classifies a missing CLI as setup required', async () => {

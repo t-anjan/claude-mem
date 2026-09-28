@@ -7,6 +7,7 @@ import { isQuotaLimitedObserverOutput } from '../../sdk/output-classifier.js';
 import { sanitizeEnv } from '../../supervisor/env-sanitizer.js';
 import { resolveCodexCommand } from '../integrations/CodexCliInstaller.js';
 import { buildSpawnSyncInvocation } from '../../shared/spawn.js';
+import { killProcessTree } from '../../shared/kill-process-tree.js';
 import type { ActiveSession, ConversationMessage } from '../worker-types.js';
 import { clearDependencyStatus } from '../../shared/dependency-health.js';
 import { OpenAICompatibleProvider, type ProviderQueryResult } from './OpenAICompatibleProvider.js';
@@ -38,16 +39,16 @@ export function codexObserverEnv(source: NodeJS.ProcessEnv = process.env): NodeJ
 
 function classifyCodexFailure(detail: string, cause: unknown): ClassifiedProviderError {
   const lower = detail.toLowerCase();
-  if (/usage_limit_exceeded|usage limit|quota|allowance exhausted|credits? exhausted/.test(lower)) {
+  if (/usage_limit_exceeded|usage limit|chatgpt usage cap|quota|allowance exhausted|credits? exhausted/.test(lower)) {
     return new ClassifiedProviderError('Codex usage allowance exhausted', { kind: 'quota_exhausted', cause });
   }
   if (/rate_limit_exceeded|rate limit|too many requests/.test(lower)) {
     return new ClassifiedProviderError('Codex rate limit', { kind: 'rate_limit', cause });
   }
-  if (/not logged in|sign.?in required|authentication|unauthori[sz]ed|invalid credentials/.test(lower)) {
+  if (/not logged in|sign.?in required|sign in to chatgpt|authentication|unauthori[sz]ed|invalid credentials/.test(lower)) {
     return new ClassifiedProviderError('Codex ChatGPT sign-in required', { kind: 'auth_invalid', cause });
   }
-  if (/unknown feature|unrecognized option|unexpected argument|invalid model|model not found|model unsupported|unsupported model/.test(lower)) {
+  if (/unknown feature|unrecognized option|unexpected argument|unknown config|unrecognized config|invalid config|invalid model|model not found|model unsupported|unsupported model/.test(lower)) {
     return new ClassifiedProviderError('Codex CLI or model is incompatible with this observer', { kind: 'setup_required', cause });
   }
   return new ClassifiedProviderError('Codex observer request failed', { kind: 'transient', cause });
@@ -61,13 +62,14 @@ function abortError(): Error {
 
 function codexArgs(model: string): string[] {
   return [
-    'exec', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules',
+    'exec', '--json', '--ephemeral', '--strict-config', '--ignore-user-config', '--ignore-rules',
     '--skip-git-repo-check', '--sandbox', 'read-only',
     '--disable', 'hooks', '--disable', 'plugins',
     '--disable', 'shell_tool', '--disable', 'unified_exec',
     '--disable', 'browser_use', '--disable', 'computer_use',
     '--disable', 'view_image', '--disable', 'multi_agent',
     '--disable', 'apps', '--disable', 'image_generation',
+    '--disable', 'sleep_tool',
     '-c', 'web_search="disabled"',
     '-c', 'approval_policy="never"',
     '-c', 'forced_login_method="chatgpt"',
@@ -76,6 +78,8 @@ function codexArgs(model: string): string[] {
     '-c', 'agents.enabled=false',
     '-c', 'include_environment_context=false',
     '-c', 'include_collaboration_mode_instructions=false',
+    '-c', 'tools.experimental_request_user_input.enabled=false',
+    '-c', 'features.code_mode.excluded_tool_namespaces=["functions","clock","collaboration"]',
     '-c', 'instructions="You are a memory observer. Follow the user prompt and do not use tools."',
     '-m', model, '-',
   ];
@@ -125,8 +129,17 @@ export async function runCodexQuery(
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       if (error) {
-        child.kill();
-        reject(error);
+        if (process.platform === 'win32' && child.pid) {
+          void killProcessTree(child.pid, { signalMode: 'immediate' }).then(
+            () => reject(error),
+            (cause) => reject(new ClassifiedProviderError('Codex process could not be stopped', {
+              kind: 'setup_required', cause,
+            })),
+          );
+        } else {
+          child.kill();
+          reject(error);
+        }
       } else {
         resolve({
           content: finalText,
@@ -160,7 +173,9 @@ export async function runCodexQuery(
         return;
       }
       if (event.type.startsWith('item.') && !['agent_message', 'reasoning'].includes(event.item?.type)) {
-        finish(classifyCodexFailure('tool invocation', new Error('Codex observer attempted a tool call')));
+        finish(new ClassifiedProviderError('Codex observer attempted a tool call', {
+          kind: 'setup_required', cause: null,
+        }));
         return;
       }
       if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') {
@@ -218,13 +233,22 @@ export async function runCodexQuery(
       if (lineBuffer.trim()) consumeLine(lineBuffer);
       if (finished) return;
       if (code !== 0 || failed || !completed || !finalText.trim()) {
-        finish(classifyCodexFailure(failureDetail || stderr || `exit ${code}`, new Error('Codex observer turn did not complete')));
+        finish(classifyCodexFailure(`${failureDetail}\n${stderr}`.trim() || `exit ${code}`, new Error('Codex observer turn did not complete')));
         return;
       }
-      if (isQuotaLimitedObserverOutput(finalText)) {
+      if (/^rate limit (?:reached|exceeded)(?:[.!]|\. please try again later[.!]?)?$/i.test(finalText.trim())) {
+        finish(new ClassifiedProviderError('Codex rate limit', { kind: 'rate_limit', cause: null }));
+        return;
+      }
+      if (isQuotaLimitedObserverOutput(finalText)
+        || /^you (?:have|'ve) reached your chatgpt usage cap[.!]?$/i.test(finalText.trim())) {
         finish(new ClassifiedProviderError('Codex usage allowance exhausted', {
           kind: 'quota_exhausted', cause: null,
         }));
+        return;
+      }
+      if (/^please sign in to chatgpt to continue[.!]?$/i.test(finalText.trim())) {
+        finish(new ClassifiedProviderError('Codex ChatGPT sign-in required', { kind: 'auth_invalid', cause: null }));
         return;
       }
       clearDependencyStatus('codex_cli');
