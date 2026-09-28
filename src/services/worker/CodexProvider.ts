@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { OBSERVER_SESSIONS_DIR, USER_SETTINGS_PATH, ensureDir } from '../../shared/paths.js';
 import { estimateTokens } from '../../shared/timeline-formatting.js';
+import { isQuotaLimitedObserverOutput } from '../../sdk/output-classifier.js';
 import { sanitizeEnv } from '../../supervisor/env-sanitizer.js';
 import { resolveCodexCommand } from '../integrations/CodexCliInstaller.js';
 import { buildSpawnSyncInvocation } from '../../shared/spawn.js';
@@ -213,6 +214,12 @@ export async function runCodexQuery(
       if (finished) return;
       if (code !== 0 || failed || !completed || !finalText.trim()) {
         finish(classifyCodexFailure(failureDetail || stderr || `exit ${code}`, new Error('Codex observer turn did not complete')));
+        return;
+      }
+      if (isQuotaLimitedObserverOutput(finalText)) {
+        finish(new ClassifiedProviderError('Codex usage allowance exhausted', {
+          kind: 'quota_exhausted', cause: null,
+        }));
         return;
       }
       clearDependencyStatus('codex_cli');

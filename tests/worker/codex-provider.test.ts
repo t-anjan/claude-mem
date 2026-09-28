@@ -24,6 +24,11 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ type: 'turn.failed', error: { message: 'You have hit your usage limit' } }));
     process.exit(1);
   }
+  if (process.env.MODE === 'quota-prose') {
+    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: "You've hit your usage limit" } }));
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 4 } }));
+    return;
+  }
   if (process.env.MODE === 'tool') {
     console.log(JSON.stringify({ type: 'item.started', item: { type: 'command_execution' } }));
     setTimeout(() => {}, 10000);
@@ -83,6 +88,9 @@ it('does not inherit provider or cloud credentials', () => {
 it('preserves a quota refusal and rejects a tool event', async () => {
   const quota = fakeCodex('quota');
   await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, quota))
+    .rejects.toMatchObject({ kind: 'quota_exhausted' });
+  const quotaProse = fakeCodex('quota-prose');
+  await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, quotaProse))
     .rejects.toMatchObject({ kind: 'quota_exhausted' });
   const tool = fakeCodex('tool');
   await expect(runCodexQuery([{ role: 'user', content: 'x' }], 'gpt-6-luna', undefined, tool))
