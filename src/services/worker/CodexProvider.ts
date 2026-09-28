@@ -72,6 +72,11 @@ function codexArgs(model: string): string[] {
     '-c', 'approval_policy="never"',
     '-c', 'forced_login_method="chatgpt"',
     '-c', 'model_reasoning_effort="low"',
+    '-c', 'skills.include_instructions=false',
+    '-c', 'agents.enabled=false',
+    '-c', 'include_environment_context=false',
+    '-c', 'include_collaboration_mode_instructions=false',
+    '-c', 'instructions="You are a memory observer. Follow the user prompt and do not use tools."',
     '-m', model, '-',
   ];
 }
