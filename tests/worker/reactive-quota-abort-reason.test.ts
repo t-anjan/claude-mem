@@ -56,7 +56,7 @@ class ThrowingProvider extends OpenAICompatibleProvider<{ apiKey: string; model:
   protected readonly syntheticIdPrefix = 'gemini';
   protected readonly forwardEmptyMessageResponse = false;
 
-  constructor(private readonly toThrow: unknown) {
+  constructor(private readonly toThrow: unknown, private readonly failDuringSetup = false) {
     super({} as DatabaseManager, {
       getMessageIterator: async function* () { yield* []; },
     } as unknown as SessionManager);
@@ -66,8 +66,8 @@ class ThrowingProvider extends OpenAICompatibleProvider<{ apiKey: string; model:
     return { apiKey: 'test-api-key', model: 'gemini-3.1-flash-lite' };
   }
 
-  protected missingApiKeyError(): Error {
-    return new Error('missing key');
+  protected assertReady(): void {
+    if (this.failDuringSetup) throw this.toThrow;
   }
 
   protected async query(): Promise<ProviderQueryResult> {
@@ -137,6 +137,15 @@ describe('reactive provider errors set a preserving abortReason (#3700)', () => 
     );
 
     expect(session.abortReason).toBe('auth:auth_invalid');
+  });
+
+  it('preserves queued work when provider setup is missing', async () => {
+    const session = makeSession();
+    const error = new ClassifiedProviderError('Codex CLI unavailable', { kind: 'setup_required', cause: null });
+    await new ThrowingProvider(error, true).startSession(session).catch(() => {});
+
+    expect(session.abortReason).toBe('auth:setup_required');
+    expect(session.abortController.signal.aborted).toBe(true);
   });
 
   // A per-attempt deadline expiry arrives as transient; finalizing on it

@@ -7,6 +7,7 @@ import {
   CMEM_FALLBACK_RETRY_MS,
   getSelectedProvider,
   recordCmemFallbackIfEligible,
+  selectProviderForGenerator,
   shouldUseCmemFallback,
 } from '../../src/services/worker/provider-dispatch.js';
 import { classifyOpenRouterError } from '../../src/services/worker/OpenRouterProvider.js';
@@ -58,6 +59,13 @@ describe('provider-dispatch', () => {
   }
 
   describe('getSelectedProvider', () => {
+    it('keeps Codex selected without a Claude fallback or API key', () => {
+      process.env.CLAUDE_MEM_PROVIDER = 'codex';
+      process.env.CLAUDE_MEM_GEMINI_API_KEY = '';
+      process.env.CLAUDE_MEM_OPENROUTER_API_KEY = '';
+      expect(getSelectedProvider()).toBe('codex');
+      expect(selectProviderForGenerator().provider).toBe('codex');
+    });
     it('returns openrouter when selected, keyed, and no fallback is recorded', () => {
       pinOpenRouterEnv();
       expect(getSelectedProvider()).toBe('openrouter');

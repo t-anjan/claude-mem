@@ -332,7 +332,7 @@ export function ContextSettingsModal({
             >
               <FormField
                 label="AI Provider"
-                tooltip="Choose the provider that generates observations: Claude (via Agent SDK), Gemini (via REST API), or OpenRouter — also used by the claude-mem observer"
+                tooltip="Choose the provider that generates observations: Claude, Gemini, OpenRouter, or Codex CLI"
               >
                 <select
                   value={formState.CLAUDE_MEM_PROVIDER || 'claude'}
@@ -341,6 +341,7 @@ export function ContextSettingsModal({
                   <option value="claude">Claude (uses your Claude account)</option>
                   <option value="gemini">Gemini (uses API key)</option>
                   <option value="openrouter">OpenRouter / claude-mem observer</option>
+                  <option value="codex">Codex CLI (uses your Codex account)</option>
                 </select>
               </FormField>
 
@@ -398,6 +399,17 @@ export function ContextSettingsModal({
                     />
                   </div>
                 </>
+              )}
+
+              {formState.CLAUDE_MEM_PROVIDER === 'codex' && (
+                <FormField label="Codex Model" tooltip="Model used by the Codex CLI for observations">
+                  <input
+                    type="text"
+                    value={formState.CLAUDE_MEM_CODEX_MODEL || 'gpt-6-luna'}
+                    onChange={(e) => updateSetting('CLAUDE_MEM_CODEX_MODEL', e.target.value)}
+                    placeholder="gpt-6-luna"
+                  />
+                </FormField>
               )}
 
               {formState.CLAUDE_MEM_PROVIDER === 'openrouter' && (

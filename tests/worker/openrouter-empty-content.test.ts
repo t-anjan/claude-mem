@@ -78,8 +78,8 @@ describe('OpenRouterProvider empty content', () => {
       );
 
       expect(session.conversationHistory).toEqual([{ role: 'assistant', content: '' }]);
-      expect(session.cumulativeInputTokens).toBe(14);
-      expect(session.cumulativeOutputTokens).toBe(6);
+      expect(session.cumulativeInputTokens).toBe(12);
+      expect(session.cumulativeOutputTokens).toBe(8);
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();

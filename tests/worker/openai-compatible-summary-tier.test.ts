@@ -45,17 +45,17 @@ class TestProvider extends OpenAICompatibleProvider<{ apiKey: string; model: str
   protected readonly syntheticIdPrefix = 'test';
   protected readonly forwardEmptyMessageResponse = false;
   readonly queriedModels: string[] = [];
+  readonly queriedSignals: (AbortSignal | undefined)[] = [];
 
   protected getConfig() {
     return { apiKey: 'test-api-key', model: 'session-model' };
   }
 
-  protected missingApiKeyError(): Error {
-    return new Error('missing key');
-  }
+  protected assertReady(): void {}
 
-  protected async query(_history: ConversationMessage[], config: { apiKey: string; model: string }): Promise<ProviderQueryResult> {
+  protected async query(_history: ConversationMessage[], config: { apiKey: string; model: string }, signal?: AbortSignal): Promise<ProviderQueryResult> {
     this.queriedModels.push(config.model);
+    this.queriedSignals.push(signal);
     return { content: '' };
   }
 
@@ -99,9 +99,11 @@ describe('OpenAICompatibleProvider summary tier routing', () => {
       },
     } as any);
 
-    await provider.startSession(makeSession());
+    const session = makeSession();
+    await provider.startSession(session);
 
     expect(provider.queriedModels).toEqual(['session-model', 'session-model', 'summary-model']);
+    expect(provider.queriedSignals).toEqual(Array(3).fill(session.abortController.signal));
   });
 
   it('keeps summarize on the session model when routing is disabled', async () => {

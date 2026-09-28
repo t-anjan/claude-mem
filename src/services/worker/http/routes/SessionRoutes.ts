@@ -10,6 +10,7 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { ClaudeProvider } from '../../ClaudeProvider.js';
 import { GeminiProvider } from '../../GeminiProvider.js';
 import { OpenRouterProvider } from '../../OpenRouterProvider.js';
+import { CodexProvider } from '../../CodexProvider.js';
 import { getSelectedProvider, recordCmemFallbackIfEligible, releaseCmemGatewayProbe, selectProviderForGenerator } from '../../provider-dispatch.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
@@ -31,10 +32,12 @@ import { SessionCompletionHandler } from '../../session/SessionCompletionHandler
 import { USER_PROMPT_DEDUPE_WINDOW_MS } from '../../../../shared/user-prompts.js';
 import {
   CLAUDE_CLI_SETUP_RECHECK_COOLDOWN_MS,
+  CODEX_CLI_SETUP_RECHECK_COOLDOWN_MS,
   clearDependencyStatus,
   getDependencyStatus,
   isDependencyStatusInCooldown,
   recordClaudeCliSetupRequired,
+  recordCodexCliSetupRequired,
 } from '../../../../shared/dependency-health.js';
 import { findClaudeExecutable } from '../../../../shared/find-claude-executable.js';
 import { recordObserverFailure } from '../../../../shared/observer-health.js';
@@ -42,10 +45,11 @@ import {
   tryAdmitQuotaProbe,
   releaseQuotaProbe,
   recordQuotaExhausted,
+  clearQuotaCooldown,
   getQuotaCooldown,
   QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS,
 } from '../../../../shared/quota-cooldown.js';
-import { isClassified, describeProviderError } from '../../provider-errors.js';
+import { ClassifiedProviderError, isClassified, describeProviderError } from '../../provider-errors.js';
 import { classifyClaudeError } from '../../ClaudeProvider.js';
 import { isSessionParkedForSlot } from '../../../../supervisor/process-registry.js';
 import type { TelegramWrapupFormatterInput } from '../../../integrations/TelegramWrapupNotifier.js';
@@ -96,6 +100,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
+    private codexAgent: CodexProvider = new CodexProvider(dbManager, sessionManager),
   ) {
     super();
     this.sessionManager.setTelegramWrapupFormatter?.(this.formatTelegramWrapup);
@@ -114,6 +119,26 @@ export class SessionRoutes extends BaseRouteHandler {
           return await this.geminiAgent.formatTelegramWrapup(input, activeModelId);
         case 'openrouter':
           return await this.openRouterAgent.formatTelegramWrapup(input, activeModelId);
+        case 'codex': {
+          const admission = tryAdmitQuotaProbe('codex');
+          if (!admission.admitted) {
+            throw new ClassifiedProviderError('Codex usage allowance is cooling down', {
+              kind: 'quota_exhausted', cause: null,
+            });
+          }
+          try {
+            const text = await this.codexAgent.formatTelegramWrapup(input, activeModelId);
+            clearQuotaCooldown('codex');
+            return text;
+          } catch (error) {
+            if (isClassified(error) && error.kind === 'quota_exhausted') {
+              recordQuotaExhausted('codex', error.message);
+            }
+            throw error;
+          } finally {
+            releaseQuotaProbe('codex', admission.claimId);
+          }
+        }
         default:
           return await this.sdkAgent.formatTelegramWrapup(input, activeModelId);
       }
@@ -158,6 +183,7 @@ export class SessionRoutes extends BaseRouteHandler {
     // single gateway re-probe rather than merely reading the clock.
     const selection = selectProviderForGenerator();
     const selectedProvider = selection.provider;
+    if (selectedProvider !== 'codex') clearDependencyStatus('codex_cli');
 
     if (!session.generatorPromise) {
       // Overflow breaker (#3800). Recycling twice without producing a
@@ -217,6 +243,23 @@ export class SessionRoutes extends BaseRouteHandler {
             releaseCmemGatewayProbe(selection.gatewayProbeClaimId);
             return;
           }
+        }
+      }
+      if (selectedProvider === 'codex') {
+        const codexStatus = getDependencyStatus('codex_cli');
+        if (codexStatus?.kind === 'setup_required') {
+          if (isDependencyStatusInCooldown(codexStatus, CODEX_CLI_SETUP_RECHECK_COOLDOWN_MS)) {
+            logger.warn('SESSION', 'Skipping Codex generator start until CLI setup is repaired', {
+              sessionId: sessionDbId,
+              source,
+              dependency: codexStatus.dependency,
+              status: codexStatus.kind,
+              message: codexStatus.message,
+            });
+            releaseCmemGatewayProbe(selection.gatewayProbeClaimId);
+            return;
+          }
+          clearDependencyStatus('codex_cli');
         }
       }
       await this.admitAndStartGenerator(session, sessionDbId, selectedProvider, source, selection.gatewayProbeClaimId);
@@ -287,7 +330,7 @@ export class SessionRoutes extends BaseRouteHandler {
   private async admitAndStartGenerator(
     session: NonNullable<ReturnType<typeof this.sessionManager.getSession>>,
     sessionDbId: number,
-    selectedProvider: 'claude' | 'gemini' | 'openrouter',
+    selectedProvider: 'claude' | 'gemini' | 'openrouter' | 'codex',
     source: string,
     gatewayProbeClaimId: number | null,
   ): Promise<void> {
@@ -327,7 +370,7 @@ export class SessionRoutes extends BaseRouteHandler {
 
   private async startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter',
+    provider: 'claude' | 'gemini' | 'openrouter' | 'codex',
     source: string,
     /** The quota probe this run claimed, or null when it was admitted without one. */
     quotaProbeClaimId: number | null,
@@ -349,8 +392,8 @@ export class SessionRoutes extends BaseRouteHandler {
       session.abortController = new AbortController();
     }
 
-    const agent = provider === 'openrouter' ? this.openRouterAgent : (provider === 'gemini' ? this.geminiAgent : this.sdkAgent);
-    const agentName = provider === 'openrouter' ? 'OpenRouter' : (provider === 'gemini' ? 'Gemini' : 'Claude SDK');
+    const agent = provider === 'codex' ? this.codexAgent : provider === 'openrouter' ? this.openRouterAgent : (provider === 'gemini' ? this.geminiAgent : this.sdkAgent);
+    const agentName = provider === 'codex' ? 'Codex CLI' : provider === 'openrouter' ? 'OpenRouter' : (provider === 'gemini' ? 'Gemini' : 'Claude SDK');
 
     const actualQueueDepth = this.sessionManager.getMessageBuffer().getPendingCount(session.sessionDbId);
 
@@ -373,11 +416,6 @@ export class SessionRoutes extends BaseRouteHandler {
 
     generatorPromise = agent.startSession(session, this.workerService)
       .catch(async error => {
-        if (myController.signal.aborted) {
-          logger.debug('HTTP', 'Generator catch: ignoring error after abort', { sessionId: session.sessionDbId });
-          return;
-        }
-
         const errorMsg = error instanceof Error ? error.message : String(error);
         if (provider === 'claude' && isClassified(error) && error.kind === 'setup_required') {
           skipGeneratorExitFinalization = true;
@@ -387,6 +425,22 @@ export class SessionRoutes extends BaseRouteHandler {
             provider,
             error: error.message,
           });
+          return;
+        }
+
+        if (provider === 'codex' && isClassified(error) && error.kind === 'setup_required') {
+          skipGeneratorExitFinalization = true;
+          recordCodexCliSetupRequired(error.message);
+          logger.warn('SESSION', 'Codex generator start requires CLI setup; future starts are withheld temporarily', {
+            sessionId: session.sessionDbId,
+            provider,
+            error: error.message,
+          });
+          return;
+        }
+
+        if (myController.signal.aborted) {
+          logger.debug('HTTP', 'Generator catch: ignoring error after abort', { sessionId: session.sessionDbId });
           return;
         }
 
@@ -476,6 +530,9 @@ export class SessionRoutes extends BaseRouteHandler {
       })
       .finally(async () => {
         if (skipGeneratorExitFinalization) {
+          // The setup gate owns this pause; do not carry its abort reason into
+          // a later generator after the dependency has been repaired.
+          session.abortReason = null;
           if (session.generatorPromise === generatorPromise) {
             session.generatorPromise = null;
           }

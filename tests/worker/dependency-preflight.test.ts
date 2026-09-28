@@ -77,6 +77,7 @@ describe('worker dependency preflight', () => {
 
   it('clears stale Claude CLI setup status when a non-Claude provider is selected', () => {
     recordDependencyStatus('claude_cli', 'setup_required', 'old failure');
+    recordDependencyStatus('codex_cli', 'setup_required', 'old failure');
 
     runWorkerDependencyPreflight({
       settings: {
@@ -95,6 +96,7 @@ describe('worker dependency preflight', () => {
     });
 
     expect(getDependencyStatus('claude_cli')).toBeNull();
+    expect(getDependencyStatus('codex_cli')).toBeNull();
   });
 
   it('records Claude CLI setup_required when Claude is selected and discovery fails', () => {

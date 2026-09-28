@@ -2,8 +2,9 @@
  * The one provider-dispatch rule, shared by SessionRoutes (generator start)
  * and worker-service (getAiStatus) — previously duplicated in both.
  *
- * Semantics: openrouter wins when selected AND a key exists; else gemini when
- * selected AND a key exists; else claude (silent fall-through, unchanged).
+ * Semantics: Codex is explicit and never falls back to Claude; openrouter wins
+ * when selected AND a key exists; else gemini when selected AND a key exists;
+ * else claude (legacy silent fall-through).
  *
  * Trial-expiry fallback (plan 2026-08-26 Phase 6): when the selected
  * openrouter config points at the cmem.ai gateway AND a terminal quota/key
@@ -44,7 +45,7 @@ export function shouldUseCmemFallback(
  * handed back to `releaseCmemGatewayProbe` when that run ends.
  */
 export interface ProviderSelection {
-  provider: 'claude' | 'gemini' | 'openrouter';
+  provider: 'claude' | 'gemini' | 'openrouter' | 'codex';
   gatewayProbeClaimId: number | null;
 }
 
@@ -53,7 +54,8 @@ export interface ProviderSelection {
  * is safe to call from anywhere — but a caller about to actually SEND must use
  * `selectProviderForGenerator` instead, or it becomes part of the herd.
  */
-export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
+export function getSelectedProvider(): ProviderSelection['provider'] {
+  if (SettingsDefaultsManager.loadFromFile(paths.settings()).CLAUDE_MEM_PROVIDER === 'codex') return 'codex';
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
     if (
@@ -88,6 +90,9 @@ export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
  * breaker is armed.
  */
 export function selectProviderForGenerator(): ProviderSelection {
+  if (SettingsDefaultsManager.loadFromFile(paths.settings()).CLAUDE_MEM_PROVIDER === 'codex') {
+    return { provider: 'codex', gatewayProbeClaimId: null };
+  }
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
     if (settings.CLAUDE_MEM_PRO_FALLBACK_AT && isCmemGatewayUrl(settings.CLAUDE_MEM_OPENROUTER_BASE_URL)) {

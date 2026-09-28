@@ -410,8 +410,10 @@ export class OpenRouterProvider extends OpenAICompatibleProvider<OpenRouterConfi
     return resolveOpenRouterConfig();
   }
 
-  protected missingApiKeyError(): Error {
-    return new Error('OpenRouter API key not configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
+  protected assertReady(config: OpenRouterConfig): void {
+    if (!config.apiKey) {
+      throw new Error('OpenRouter API key not configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
+    }
   }
 
   protected prepareSessionExtras(session: ActiveSession, config: OpenRouterConfig): void {

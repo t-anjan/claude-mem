@@ -34,6 +34,7 @@ export interface ProviderQueryResult {
   content: string;
   tokensUsed?: number;
   inputTokens?: number;
+  cachedInputTokens?: number;
   outputTokens?: number;
   /** Real provider-reported spend in USD (only some gateways report it). */
   costUsd?: number;
@@ -42,15 +43,14 @@ export interface ProviderQueryResult {
 }
 
 /**
- * Shared scaffolding for OpenAI-compatible, multi-turn HTTP providers
- * (Gemini, OpenRouter). The session lifecycle — synthetic memory-session-id
+ * Shared scaffolding for multi-turn observation providers. The session lifecycle — synthetic memory-session-id
  * generation, init/continuation prompt, the observation/summary message loop,
  * cumulative token accounting, abort-aware error handling, and history
- * truncation — is identical between them. Per-provider differences (config
+ * truncation — is shared. Per-provider differences (config
  * resolution, request shape, token estimation, usage/cost reporting) are
  * supplied by abstract members.
  */
-export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string; model: string; plainText?: boolean }> {
+export abstract class OpenAICompatibleProvider<TConfig extends { model: string; plainText?: boolean }> {
   protected dbManager: DatabaseManager;
   protected sessionManager: SessionManager;
 
@@ -71,13 +71,13 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     this.sessionManager = sessionManager;
   }
 
-  /** Resolve API key, model, and any per-provider request parameters. */
+  /** Resolve model and any per-provider request parameters. */
   protected abstract getConfig(): TConfig;
 
-  /** Throw a provider-specific "API key not configured" error. */
-  protected abstract missingApiKeyError(): Error;
+  /** Fail before starting when this provider's local setup is incomplete. */
+  protected abstract assertReady(config: TConfig): void;
 
-  /** Issue the actual HTTP request and normalize its response. */
+  /** Issue the provider request and normalize its response. */
   protected abstract query(history: ConversationMessage[], config: TConfig, signal?: AbortSignal): Promise<ProviderQueryResult>;
 
   /**
@@ -102,11 +102,8 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     activeModelId?: string,
   ): Promise<string> {
     const config = this.getConfig();
-    if (!config.apiKey) {
-      throw this.missingApiKeyError();
-    }
-    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    const model = resolveSummaryTierModel(activeModelId ?? config.model, settings);
+    this.assertReady(config);
+    const model = this.resolveSummaryModel({ ...config, model: activeModelId ?? config.model });
     const summaryConfig = { ...config, model, plainText: true };
     const result = await this.query(
       [{ role: 'user', content: buildTelegramWrapupPrompt(input.summaryText) }],
@@ -126,6 +123,21 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
   /** Build the session.lastUsage value from a query result. */
   protected abstract buildLastUsage(result: ProviderQueryResult): ActiveSession['lastUsage'];
 
+  protected resolveSummaryModel(config: TConfig): string {
+    return resolveSummaryTierModel(config.model, SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH));
+  }
+
+  private addCumulativeUsage(session: ActiveSession, result: ProviderQueryResult): void {
+    if (typeof result.inputTokens === 'number' && typeof result.outputTokens === 'number') {
+      session.cumulativeInputTokens += result.inputTokens;
+      session.cumulativeOutputTokens += result.outputTokens;
+      return;
+    }
+    const tokensUsed = result.tokensUsed || 0;
+    session.cumulativeInputTokens += Math.floor(tokensUsed * 0.7);
+    session.cumulativeOutputTokens += Math.floor(tokensUsed * 0.3);
+  }
+
   /** Hook for per-session setup that runs once config is resolved (e.g. endpointClass). */
   protected prepareSessionExtras(_session: ActiveSession, _config: TConfig): void {}
 
@@ -138,12 +150,14 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
 
   async startSession(session: ActiveSession, worker?: WorkerRef): Promise<void> {
     const config = this.getConfig();
-    const { apiKey, model } = config;
+    const { model } = config;
     session.lastModelId = model;
     this.prepareSessionExtras(session, config);
 
-    if (!apiKey) {
-      throw this.missingApiKeyError();
+    try {
+      this.assertReady(config);
+    } catch (error) {
+      return this.handleSessionError(error, session, worker);
     }
 
     if (!session.memorySessionId) {
@@ -175,7 +189,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     try {
       session.lastPromptSentAt = Date.now();
       session.lastGeneratorSource = 'init';
-      const initResponse = await this.query(session.conversationHistory, config);
+      const initResponse = await this.query(session.conversationHistory, config, session.abortController.signal);
       this.handleInitResponse(initResponse, session, model);
     } catch (error: unknown) {
       // Classified errors are logged once, at SessionRoutes' `Observer failed`
@@ -248,9 +262,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
       return;
     }
 
-    const tokensUsed = initResponse.tokensUsed || 0;
-    session.cumulativeInputTokens += Math.floor(tokensUsed * 0.7);
-    session.cumulativeOutputTokens += Math.floor(tokensUsed * 0.3);
+    this.addCumulativeUsage(session, initResponse);
     // The init prompt carries the user's request and no tool call, so nothing in
     // its reply can be an observation of this session — an <observation> here was
     // invented from <user_request> alone and would be stored as memory for work
@@ -294,7 +306,8 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     // rather than a head/tail slice with the middle cut out (#3800).
     const optimized = await optimizeObservationFields(
       { toolInput: message.tool_input, toolOutput: message.tool_response },
-      (text, budgetChars, signal) => this.compressField(text, budgetChars, config, signal),
+      (text, budgetChars, signal) => this.compressField(text, budgetChars, config,
+        AbortSignal.any([signal, session.abortController.signal])),
       { sessionDbId: session.sessionDbId, toolName: message.tool_name },
     );
 
@@ -311,7 +324,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
     session.lastPromptSentAt = Date.now();
     session.lastGeneratorSource = 'ingest';
-    const obsResponse = await this.query(session.conversationHistory, config);
+    const obsResponse = await this.query(session.conversationHistory, config, session.abortController.signal);
 
     let tokensUsed = 0;
     if (obsResponse.content) {
@@ -319,8 +332,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
       // Appending it here too stored every reply twice (#3619), inflating the
       // window — and therefore every subsequent request — by ~50%.
       tokensUsed = obsResponse.tokensUsed || 0;
-      session.cumulativeInputTokens += Math.floor(tokensUsed * 0.7);
-      session.cumulativeOutputTokens += Math.floor(tokensUsed * 0.3);
+      this.addCumulativeUsage(session, obsResponse);
       // Both sides or nothing: a backend reporting only one of the two counts
       // must not produce a half-real event (input=0 → compression_ratio 0.0).
       session.lastUsage = this.buildLastUsage(obsResponse);
@@ -363,22 +375,20 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     session.conversationHistory.push({ role: 'user', content: summaryPrompt });
     session.lastPromptSentAt = Date.now();
     session.lastGeneratorSource = 'summarize';
-    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    const summaryModel = resolveSummaryTierModel(config.model, settings);
+    const summaryModel = this.resolveSummaryModel(config);
     const summaryConfig = summaryModel === config.model ? config : { ...config, model: summaryModel };
     if (summaryConfig !== config) {
       logger.debug('SESSION', 'Tier routing: summary model', {
         sessionId: session.sessionDbId, model: summaryModel
       });
     }
-    const summaryResponse = await this.query(session.conversationHistory, summaryConfig);
+    const summaryResponse = await this.query(session.conversationHistory, summaryConfig, session.abortController.signal);
 
     let tokensUsed = 0;
     if (summaryResponse.content) {
       // Appended once, by processAgentResponse below — see processObservationMessage.
       tokensUsed = summaryResponse.tokensUsed || 0;
-      session.cumulativeInputTokens += Math.floor(tokensUsed * 0.7);
-      session.cumulativeOutputTokens += Math.floor(tokensUsed * 0.3);
+      this.addCumulativeUsage(session, summaryResponse);
       session.lastUsage = this.buildLastUsage(summaryResponse);
     }
 
@@ -414,6 +424,8 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
       // Same shape, same list: handleGeneratorExit already honours 'auth', and
       // credentials that are fixed by /login are no more fatal than a 429.
       case 'auth_invalid':
+        return `auth:${error.kind}`;
+      case 'setup_required':
         return `auth:${error.kind}`;
       // A timeout or network fault that outlived the retry policy. Finalizing
       // would turn it into permanent data loss — the same reasoning as the

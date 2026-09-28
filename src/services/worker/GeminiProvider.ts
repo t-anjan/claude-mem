@@ -233,8 +233,10 @@ export class GeminiProvider extends OpenAICompatibleProvider<GeminiConfig> {
     return this.getGeminiConfig();
   }
 
-  protected missingApiKeyError(): Error {
-    return new Error('Gemini API key not configured. Set CLAUDE_MEM_GEMINI_API_KEY in settings or GEMINI_API_KEY environment variable.');
+  protected assertReady(config: GeminiConfig): void {
+    if (!config.apiKey) {
+      throw new Error('Gemini API key not configured. Set CLAUDE_MEM_GEMINI_API_KEY in settings or GEMINI_API_KEY environment variable.');
+    }
   }
 
   protected estimateTokens(text: string): number {

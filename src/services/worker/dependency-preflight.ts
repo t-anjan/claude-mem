@@ -162,6 +162,8 @@ export function runWorkerDependencyPreflight(options: WorkerDependencyPreflightO
   const provider = options.settings.CLAUDE_MEM_PROVIDER || 'claude';
   const chromaEnabled = options.settings.CLAUDE_MEM_CHROMA_ENABLED !== 'false';
 
+  if (provider !== 'codex') clearDependencyStatus('codex_cli');
+
   if (provider === 'claude') {
     const findClaudeExecutable = options.findClaudeExecutable ?? (() => defaultFindClaudeExecutable('WORKER'));
     try {

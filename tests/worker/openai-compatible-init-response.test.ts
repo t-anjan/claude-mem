@@ -64,9 +64,7 @@ class TestProvider extends OpenAICompatibleProvider<{ apiKey: string; model: str
     return { apiKey: 'test-api-key', model: 'session-model' };
   }
 
-  protected missingApiKeyError(): Error {
-    return new Error('missing key');
-  }
+  protected assertReady(): void {}
 
   protected async query(_history: ConversationMessage[], _config: { apiKey: string; model: string }): Promise<ProviderQueryResult> {
     this.queries++;
