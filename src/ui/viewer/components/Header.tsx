@@ -3,50 +3,32 @@ import { ThemeToggle } from './ThemeToggle';
 import { ThemePreference } from '../hooks/useTheme';
 import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
+import { PRO_TRIAL_PITCH, PRO_TRIAL_SHORT, PRO_TRIAL_URL } from '../constants/promo';
 
 interface HeaderProps {
-  isConnected: boolean;
   projects: string[];
-  sources: string[];
   currentFilter: string;
-  currentSource: string;
   onFilterChange: (filter: string) => void;
-  onSourceChange: (source: string) => void;
   isProcessing: boolean;
   queueDepth: number;
   themePreference: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
   onContextPreviewToggle: () => void;
-}
-
-function formatSourceLabel(source: string): string {
-  if (source === 'all') return 'All';
-  if (source === 'claude') return 'Claude';
-  if (source === 'codex') return 'Codex';
-  return source.charAt(0).toUpperCase() + source.slice(1);
-}
-
-function buildSourceTabs(sources: string[]): string[] {
-  const merged = ['all', 'claude', 'codex', ...sources];
-  return Array.from(new Set(merged.filter(Boolean)));
+  onShowHelp?: () => void;
 }
 
 export function Header({
-  isConnected,
   projects,
-  sources,
   currentFilter,
-  currentSource,
   onFilterChange,
-  onSourceChange,
   isProcessing,
   queueDepth,
   themePreference,
   onThemeChange,
-  onContextPreviewToggle
+  onContextPreviewToggle,
+  onShowHelp
 }: HeaderProps) {
   useSpinningFavicon(isProcessing);
-  const availableSources = buildSourceTabs(sources);
 
   return (
     <div className="header">
@@ -62,19 +44,23 @@ export function Header({
           </div>
           <span className="logo-text">claude-mem</span>
         </h1>
-        <div className="source-tabs" role="tablist" aria-label="Context source tabs">
-          {availableSources.map(source => (
-            <button
-              key={source}
-              type="button"
-              className={`source-tab ${currentSource === source ? 'active' : ''}`}
-              onClick={() => onSourceChange(source)}
-              aria-pressed={currentSource === source}
-            >
-              {formatSourceLabel(source)}
-            </button>
-          ))}
-        </div>
+        {/* Most people running the free plugin never learn the trial exists.
+            It sits beside the logo (not in .status) so it survives the
+            responsive rules that hide the icon links on tablet and mobile. */}
+        <a
+          className="pro-trial-cta"
+          href={PRO_TRIAL_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={PRO_TRIAL_PITCH}
+          aria-label={PRO_TRIAL_PITCH}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
+          </svg>
+          <span className="pro-trial-cta-full">{PRO_TRIAL_PITCH}</span>
+          <span className="pro-trial-cta-short">{PRO_TRIAL_SHORT}</span>
+        </a>
       </div>
       <div className="status">
         <a
@@ -125,6 +111,18 @@ export function Header({
           preference={themePreference}
           onThemeChange={onThemeChange}
         />
+        <button
+          className="settings-btn"
+          onClick={() => onShowHelp?.()}
+          title="Show welcome card"
+          aria-label="Show welcome card"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
         <button
           className="settings-btn"
           onClick={onContextPreviewToggle}

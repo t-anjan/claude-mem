@@ -1,9 +1,3 @@
-/**
- * Regression test for misplaced smart-explore language docs (#1651)
- *
- * The smart-explore language support section was missing from smart-explore/SKILL.md
- * and had previously been in mem-search/SKILL.md (where it doesn't belong).
- */
 import { describe, it, expect } from 'bun:test';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -48,8 +42,30 @@ describe('skill docs placement (#1651)', () => {
     expect(existsSync(path)).toBe(true);
     const content = readFileSync(path, 'utf-8');
 
-    // Language support docs belong in smart-explore, not mem-search
     expect(content).not.toContain('tree-sitter');
     expect(content).not.toContain('Bundled Languages');
+  });
+
+  it('cloud-sync/SKILL.md requires the authenticated Hub probe for success', () => {
+    const path = join(SKILLS_DIR, 'cloud-sync/SKILL.md');
+    expect(existsSync(path)).toBe(true);
+    const content = readFileSync(path, 'utf-8');
+
+    expect(content).toContain('hub.reachable: true');
+    expect(content).toContain('hub.reachable: false');
+    expect(content).toContain('authenticated, read-only');
+    expect(content).toContain('GET /v1/sync/status');
+    expect(content).toContain('never appends or advances');
+    expect(content).not.toContain('/api/pro/sync/status');
+  });
+
+  it('cloud sync copy keeps the launch boundary and 4,000,000-byte request contract accurate', () => {
+    const docs = readFileSync(join(import.meta.dir, '../../docs/public/cloud-sync.mdx'), 'utf-8');
+    const source = readFileSync(join(import.meta.dir, '../../src/services/sync/CloudSync.ts'), 'utf-8');
+
+    expect(docs).toContain('up to 500 ops / 4,000,000 encoded');
+    expect(docs).not.toContain('500 ops / 2&nbsp;MB');
+    expect(source).toContain('no historical/pre-launch backfill');
+    expect(source).not.toContain('This IS backfill');
   });
 });

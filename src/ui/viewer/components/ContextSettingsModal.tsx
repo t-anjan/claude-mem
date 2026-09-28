@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import type { Settings } from '../types';
 import { TerminalPreview } from './TerminalPreview';
 import { useContextPreview } from '../hooks/useContextPreview';
+import { DEFAULT_SETTINGS } from '../constants/settings';
 
 interface ContextSettingsModalProps {
   isOpen: boolean;
@@ -12,7 +13,6 @@ interface ContextSettingsModalProps {
   saveStatus: string;
 }
 
-// Collapsible section component
 function CollapsibleSection({
   title,
   description,
@@ -54,7 +54,6 @@ function CollapsibleSection({
   );
 }
 
-// Form field with optional tooltip
 function FormField({
   label,
   tooltip,
@@ -83,7 +82,6 @@ function FormField({
   );
 }
 
-// Toggle switch component
 function ToggleSwitch({
   id,
   label,
@@ -130,12 +128,10 @@ export function ContextSettingsModal({
 }: ContextSettingsModalProps) {
   const [formState, setFormState] = useState<Settings>(settings);
 
-  // Update form state when settings prop changes
   useEffect(() => {
     setFormState(settings);
   }, [settings]);
 
-  // Get context preview based on current form state
   const {
     preview,
     isLoading,
@@ -163,7 +159,6 @@ export function ContextSettingsModal({
     updateSetting(key, newValue);
   }, [formState, updateSetting]);
 
-  // Handle ESC key
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -337,7 +332,7 @@ export function ContextSettingsModal({
             >
               <FormField
                 label="AI Provider"
-                tooltip="Choose between Claude (via Agent SDK) or Gemini (via REST API)"
+                tooltip="Choose the provider that generates observations: Claude (via Agent SDK), Gemini (via REST API), or OpenRouter — also used by the claude-mem observer"
               >
                 <select
                   value={formState.CLAUDE_MEM_PROVIDER || 'claude'}
@@ -345,7 +340,7 @@ export function ContextSettingsModal({
                 >
                   <option value="claude">Claude (uses your Claude account)</option>
                   <option value="gemini">Gemini (uses API key)</option>
-                  <option value="openrouter">OpenRouter (multi-model)</option>
+                  <option value="openrouter">OpenRouter / claude-mem observer</option>
                 </select>
               </FormField>
 
@@ -383,12 +378,14 @@ export function ContextSettingsModal({
                     tooltip="Gemini model used for generating observations"
                   >
                     <select
-                      value={formState.CLAUDE_MEM_GEMINI_MODEL || 'gemini-2.5-flash-lite'}
+                      value={formState.CLAUDE_MEM_GEMINI_MODEL || 'gemini-flash-latest'}
                       onChange={(e) => updateSetting('CLAUDE_MEM_GEMINI_MODEL', e.target.value)}
                     >
-                      <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (10 RPM free)</option>
-                      <option value="gemini-2.5-flash">gemini-2.5-flash (5 RPM free)</option>
-                      <option value="gemini-3-flash-preview">gemini-3-flash-preview (5 RPM free)</option>
+                      <option value="gemini-flash-latest">gemini-flash-latest (default, latest GA Flash)</option>
+                      <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (latest GA Flash-Lite)</option>
+                      <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                      <option value="gemini-3-flash-preview">gemini-3-flash-preview (preview)</option>
                     </select>
                   </FormField>
                   <div className="toggle-group" style={{ marginTop: '8px' }}>
@@ -453,6 +450,22 @@ export function ContextSettingsModal({
               )}
 
               <FormField
+                label="Claude Code CLI path"
+                tooltip="Executable path for the Claude Code CLI. File/env only — edit ~/.claude-mem/settings.json or set CLAUDE_CODE_PATH in the environment, then restart the worker."
+              >
+                <input
+                  type="text"
+                  value={formState.CLAUDE_CODE_PATH || ''}
+                  readOnly
+                  disabled
+                  placeholder="Auto-detect (set via settings.json or env)"
+                />
+                <span className="toggle-description">
+                  Read-only here. Set <code>CLAUDE_CODE_PATH</code> in <code>~/.claude-mem/settings.json</code> or the environment.
+                </span>
+              </FormField>
+
+              <FormField
                 label="Worker Port"
                 tooltip="Port for the background worker service"
               >
@@ -460,7 +473,7 @@ export function ContextSettingsModal({
                   type="number"
                   min="1024"
                   max="65535"
-                  value={formState.CLAUDE_MEM_WORKER_PORT || '37777'}
+                  value={formState.CLAUDE_MEM_WORKER_PORT || DEFAULT_SETTINGS.CLAUDE_MEM_WORKER_PORT}
                   onChange={(e) => updateSetting('CLAUDE_MEM_WORKER_PORT', e.target.value)}
                 />
               </FormField>

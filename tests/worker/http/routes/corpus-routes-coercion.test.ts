@@ -1,9 +1,3 @@
-/**
- * CorpusRoutes Type Coercion Tests
- *
- * Tests that MCP/HTTP clients sending string-encoded corpus filters are coerced
- * before CorpusBuilder assumes array and number fields.
- */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import type { Request, Response } from 'express';
@@ -50,6 +44,31 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve();
 }
 
+function captureChain(mockApp: any, targetPath: string): (req: Request, res: Response) => void {
+  let middleware: ((req: Request, res: Response, next: () => void) => void) | undefined;
+  let handler: (req: Request, res: Response) => void;
+  mockApp.post = mock((path: string, ...rest: any[]) => {
+    if (path !== targetPath) return;
+    if (rest.length === 1) {
+      handler = rest[0];
+    } else {
+      middleware = rest[0];
+      handler = rest[1];
+    }
+  });
+  return (req: Request, res: Response): void => {
+    if (!middleware) {
+      handler(req, res);
+      return;
+    }
+    let nextCalled = false;
+    middleware(req, res, () => {
+      nextCalled = true;
+    });
+    if (nextCalled) handler(req, res);
+  };
+}
+
 describe('CorpusRoutes Type Coercion', () => {
   let handler: (req: Request, res: Response) => void;
   let mockBuild: ReturnType<typeof mock>;
@@ -63,14 +82,11 @@ describe('CorpusRoutes Type Coercion', () => {
       {} as any
     );
 
-    const mockApp = {
-      post: mock((path: string, fn: any) => {
-        if (path === '/api/corpus') handler = fn;
-      }),
+    const mockApp: any = {
       get: mock(() => {}),
       delete: mock(() => {}),
     };
-
+    handler = captureChain(mockApp, '/api/corpus');
     routes.setupRoutes(mockApp as any);
   });
 
@@ -163,6 +179,30 @@ describe('CorpusRoutes Type Coercion', () => {
     const { req, res, statusSpy } = createMockReqRes({
       name: 'bad-limit',
       limit: 'many',
+    });
+
+    handler(req as Request, res as Response);
+    await flushPromises();
+
+    expect(statusSpy).toHaveBeenCalledWith(400);
+    expect(mockBuild).not.toHaveBeenCalled();
+  });
+
+  it('rejects a corpus name with illegal characters before calling CorpusBuilder', async () => {
+    const { req, res, statusSpy } = createMockReqRes({
+      name: 'bad name/with spaces',
+    });
+
+    handler(req as Request, res as Response);
+    await flushPromises();
+
+    expect(statusSpy).toHaveBeenCalledWith(400);
+    expect(mockBuild).not.toHaveBeenCalled();
+  });
+
+  it('rejects a padded corpus name instead of silently trimming it', async () => {
+    const { req, res, statusSpy } = createMockReqRes({
+      name: '  bad  ',
     });
 
     handler(req as Request, res as Response);
